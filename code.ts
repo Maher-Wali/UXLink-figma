@@ -3,7 +3,7 @@ figma.showUI(__html__, {
   height: 100,
 });
 
-figma.ui.onmessage = async (msg: { type: string }) => {
+figma.ui.onmessage = async (msg: any) => {
   if (msg.type === 'send') {
     let selection = figma.currentPage.selection;
     if (selection.length === 0) {
@@ -21,6 +21,31 @@ figma.ui.onmessage = async (msg: { type: string }) => {
           return parent.children.indexOf(a) - parent.children.indexOf(b);
         });
       }
+    }
+
+    // Helper to pad hex values (replaces padStart for compatibility)
+    function padHex(num: number): string {
+      const hex = num.toString(16);
+      return hex.length === 1 ? '0' + hex : hex;
+    }
+
+    // Helper to extract color from fills/strokes
+    function extractColor(paint: Paint): string {
+      if (paint.type === 'SOLID' && paint.visible !== false) {
+        const r = Math.round(paint.color.r * 255);
+        const g = Math.round(paint.color.g * 255);
+        const b = Math.round(paint.color.b * 255);
+        let color = `#${padHex(r)}${padHex(g)}${padHex(b)}`;
+        
+        // Apply opacity if present
+        if (paint.opacity !== undefined && paint.opacity < 1) {
+          const alpha = Math.round(paint.opacity * 255);
+          color += padHex(alpha);
+        }
+        
+        return color;
+      }
+      return 'none';
     }
 
     // Recursive function to build node data with hierarchy
@@ -78,6 +103,53 @@ figma.ui.onmessage = async (msg: { type: string }) => {
         } catch (e) {
           console.error('Error loading font:', e);
         }
+
+        // Extract fill color from text fills
+        let textFillColor = 'none';
+        if (textNode.fills !== figma.mixed && Array.isArray(textNode.fills) && textNode.fills.length > 0) {
+          console.log('First fill:', textNode.fills[0]);
+          const firstFill = textNode.fills[0];
+          if (firstFill.type === 'SOLID' && firstFill.visible !== false) {
+            const r = Math.round(firstFill.color.r * 255);
+            const g = Math.round(firstFill.color.g * 255);
+            const b = Math.round(firstFill.color.b * 255);
+            textFillColor = `#${padHex(r)}${padHex(g)}${padHex(b)}`;
+          
+            if (firstFill.opacity !== undefined && firstFill.opacity < 1) {
+              const alpha = Math.round(firstFill.opacity * 255);
+              textFillColor += padHex(alpha);
+            }
+          }
+        }
+
+        // Extract stroke color from text strokes
+        let textStrokeColor = 'none';
+        let textStrokeWeight = 0;
+        if (Array.isArray(textNode.strokes) && textNode.strokes.length > 0) {
+          console.log('First stroke:', textNode.strokes[0]);
+          const firstStroke = textNode.strokes[0];
+          if (firstStroke.type === 'SOLID' && firstStroke.visible !== false) {
+            const r = Math.round(firstStroke.color.r * 255);
+            const g = Math.round(firstStroke.color.g * 255);
+            const b = Math.round(firstStroke.color.b * 255);
+            textStrokeColor = `#${padHex(r)}${padHex(g)}${padHex(b)}`;
+          
+            // Apply opacity if present
+            if (firstStroke.opacity !== undefined && firstStroke.opacity < 1) {
+              const alpha = Math.round(firstStroke.opacity * 255);
+              textStrokeColor += padHex(alpha);
+            }
+          }
+        }
+
+        if (typeof textNode.strokeWeight === 'number') {
+          textStrokeWeight = textNode.strokeWeight;
+        }
+        
+        // Override the CSS-based fill/stroke with text-specific colors
+        data.fill = textFillColor;
+        data.stroke = textStrokeColor;
+        data.strokeWeight = textStrokeWeight;
         
         data.shapeSpecific = {
           characters: textNode.characters,
@@ -97,7 +169,8 @@ figma.ui.onmessage = async (msg: { type: string }) => {
           hasMixedStyling: (
             typeof textNode.fontSize === 'symbol' ||
             typeof textNode.fontName === 'symbol' ||
-            typeof textNode.fontWeight === 'symbol'
+            typeof textNode.fontWeight === 'symbol' ||
+            typeof textNode.fills === 'symbol'
           ),
           
           // For mixed styling, store character ranges
@@ -111,12 +184,25 @@ figma.ui.onmessage = async (msg: { type: string }) => {
           
           for (let i = 0; i < characters.length; i++) {
             try {
+              // Extract fill color for this character range
+              let charFillColor = 'none';
+              const rangeFills = textNode.getRangeFills(i, i + 1);
+              if (Array.isArray(rangeFills) && rangeFills.length > 0) {
+                const fill = rangeFills[0];
+                if (fill.type === 'SOLID') {
+                  const r = Math.round(fill.color.r * 255);
+                  const g = Math.round(fill.color.g * 255);
+                  const b = Math.round(fill.color.b * 255);
+                  charFillColor = `#${padHex(r)}${padHex(g)}${padHex(b)}`;
+                }
+              }
+              
               const charStyle = {
                 start: i,
                 end: i + 1,
                 fontSize: textNode.getRangeFontSize(i, i + 1),
                 fontName: textNode.getRangeFontName(i, i + 1),
-                fills: textNode.getRangeFills(i, i + 1),
+                fillColor: charFillColor,
                 textDecoration: textNode.getRangeTextDecoration(i, i + 1),
                 textCase: textNode.getRangeTextCase(i, i + 1),
                 letterSpacing: textNode.getRangeLetterSpacing(i, i + 1),
@@ -350,6 +436,8 @@ figma.ui.onmessage = async (msg: { type: string }) => {
       const nodeData = await buildNodeData(node);
       layers.push(nodeData);
     }
+    layers.reverse();
+    console.log(layers);
 
     // Send the data object directly to UI (don't stringify here)
     // The UI will handle stringifying when copying to clipboard
@@ -364,7 +452,12 @@ figma.ui.onmessage = async (msg: { type: string }) => {
   }
   
   if (msg.type === 'get') {
-    const selection = figma.currentPage.selection;
-    figma.notify(`Got: ${selection.length} items selected`);
+    figma.ui.postMessage({ 
+      type: 'readClipboard'
+    });
+  }
+
+  if (msg.type === 'ClipboardData') {
+    const jsonContent = String(msg.text);
   }
 };

@@ -50,7 +50,7 @@
       parent.postMessage({ pluginMessage: { type: 'get' } }, '*');
     };
 
-    window.onmessage = (event) => {
+    window.onmessage = async (event) => {
       const msg = event.data.pluginMessage;
       
       if (msg.type === 'copyToClipboard') {
@@ -74,6 +74,22 @@
           parent.postMessage({ pluginMessage: { type: 'clipboardSuccess' } }, '*');
         } catch (e) {
           console.error('Clipboard error:', e);
+        }
+      }
+      if (message.type == 'readClipboard') {
+        try {
+          const text = await navigator.clipboard.readText();
+
+          parent.postMessage({
+            pluginMessage: {
+              type: 'clipboardData',
+              text
+            }
+          }, '*');
+        } catch(err) {
+          parent.postMessage({
+            pluginMessage: { type: 'clipboardError', error: String(err) }
+          }, '*');
         }
       }
     };
